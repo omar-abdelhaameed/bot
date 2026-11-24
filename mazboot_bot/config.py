@@ -31,6 +31,30 @@ class Config:
     google_credentials_json: str = ""   # the service-account JSON itself (for Railway/Render style hosting)
 
 
+_GCP_FIELDS = ("type", "project_id", "private_key_id", "private_key", "client_email", "client_id",
+               "auth_uri", "token_uri", "auth_provider_x509_cert_url", "client_x509_cert_url",
+               "universe_domain")
+
+def _credentials_json() -> str:
+    """Service-account JSON: GOOGLE_CREDENTIALS_JSON as-is, else rebuilt from GCP_<FIELD> variables
+    (GCP_PRIVATE_KEY, GCP_CLIENT_EMAIL, ...) for hosts that cap each env value at ~2000 chars."""
+    raw = os.environ.get("GOOGLE_CREDENTIALS_JSON", "").strip()
+    if raw:
+        return raw
+    key = os.environ.get("GCP_PRIVATE_KEY", "").strip()
+    if not key:
+        return ""
+    import json
+    info = {}
+    for field in _GCP_FIELDS:
+        val = os.environ.get("GCP_" + field.upper(), "").strip()
+        if val:
+            info[field] = val
+    info["private_key"] = key.replace("\\n", "\n")
+    info.setdefault("type", "service_account")
+    info.setdefault("token_uri", "https://oauth2.googleapis.com/token")
+    return json.dumps(info)
+
 def load() -> Config:
     _load_dotenv()
     users = {}
@@ -50,5 +74,5 @@ def load() -> Config:
         model=os.environ.get("CLAUDE_MODEL", "claude-haiku-5-5"),
         timezone=os.environ.get("TIMEZONE", "Africa/Cairo"),
         notify_chat=int(notify) if notify else None,
-        google_credentials_json=os.environ.get("GOOGLE_CREDENTIALS_JSON", ""),
+        google_credentials_json=_credentials_json(),
     )
