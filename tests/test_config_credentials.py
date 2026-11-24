@@ -86,6 +86,39 @@ def test_key_split_in_parts(monkeypatch):
     _assert_usable(config.load())
 
 
+def test_key_split_in_the_middle_of_an_escape(monkeypatch):
+    escaped = KEY.replace("\n", "\\n")
+    cut = escaped.index("\\n", 100) + 1          # part 1 ends with "\", part 2 starts with "n"
+    monkeypatch.setenv("GCP_PRIVATE_KEY_1", escaped[:cut])
+    monkeypatch.setenv("GCP_PRIVATE_KEY_2", escaped[cut:])
+    monkeypatch.setenv("GCP_CLIENT_EMAIL", EMAIL)
+    _assert_usable(config.load())
+
+
+@pytest.mark.parametrize("value", [
+    "\n".join(KEY.strip().splitlines()[1:-1]),            # only the base64 body, no BEGIN/END
+    KEY.replace("-----END PRIVATE KEY-----", ""),         # END line dropped, body complete
+])
+def test_missing_frame_is_repaired(monkeypatch, value):
+    monkeypatch.setenv("GCP_PRIVATE_KEY", value.replace("\n", "\\n"))
+    monkeypatch.setenv("GCP_CLIENT_EMAIL", EMAIL)
+    _assert_usable(config.load())
+
+
+@pytest.mark.parametrize("value, expect", [
+    ("-----BEGIN PRIVATE KEY-----", "END line: NO"),     # only the first line got pasted
+    (KEY.replace("\n", "\\n")[:900], "END line: NO"),     # cut off by a length limit
+])
+def test_damaged_key_gives_clear_error_without_leaking(monkeypatch, value, expect):
+    monkeypatch.setenv("GCP_PRIVATE_KEY", value)
+    monkeypatch.setenv("GCP_CLIENT_EMAIL", EMAIL)
+    with pytest.raises(SystemExit) as e:
+        config.load()
+    msg = str(e.value)
+    assert "damaged" in msg and expect in msg
+    assert KEY.strip().splitlines()[1] not in msg        # never prints key material
+
+
 def test_key_without_email_gives_clear_error(monkeypatch):
     monkeypatch.setenv("GCP_PRIVATE_KEY", KEY)
     with pytest.raises(SystemExit, match="client email"):

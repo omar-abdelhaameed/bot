@@ -59,20 +59,48 @@ def _env_field(field: str) -> str:
     return ""
 
 
+def _b64(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9+/=]", "", s.replace("\\n", ""))
+
+
 def _normalize_pem(key: str) -> str:
     """Rebuild a PEM key whatever happened to its line breaks (literal \\n, real newlines,
-    newlines turned into spaces by a single-line input box, or the key split in parts)."""
+    newlines turned into spaces by a single-line input box, the key split in parts), and also
+    when only the base64 body was pasted or the BEGIN/END lines were dropped."""
     key = key.replace("\\n", "\n")
-    m = re.search(r"-----BEGIN ([A-Z ]+)-----(.*?)-----END \1-----", key, re.S)
-    if not m:
-        return key
-    label, body = m.group(1), re.sub(r"[^A-Za-z0-9+/=]", "", m.group(2).replace("\\n", ""))
+    label, body = "PRIVATE KEY", None
+    m = re.search(r"-----\s*BEGIN ([A-Z ]+?)\s*-----(.*?)(?:-----\s*END [A-Z ]+?\s*-----|$)", key, re.S)
+    if m:
+        label, body = m.group(1).strip(), _b64(m.group(2))
+    else:
+        body = _b64(re.sub(r"-----[^-]*-----", "", key))
     lines = [body[i:i + 64] for i in range(0, len(body), 64)]
     return f"-----BEGIN {label}-----\n" + "\n".join(lines) + f"\n-----END {label}-----\n"
 
 
-def _private_key() -> str:
-    key = _env_field("private_key")
+def _check_key(key: str, original: str, where: str) -> None:
+    """Fail at startup with a clear, secret-free explanation if the key can't be loaded."""
+    from cryptography.hazmat.primitives import serialization
+    try:
+        serialization.load_pem_private_key(key.encode(), password=None)
+        return
+    except Exception:
+        pass
+    body = _b64(re.sub(r"-----[^-]*-----", "", original.replace("\\n", "\n")))
+    raise SystemExit(
+        f"The private key in {where} is damaged, so Google login can't work.\n"
+        f"  What I received: {len(original)} characters, "
+        f"BEGIN line: {'yes' if 'BEGIN' in original else 'NO'}, END line: {'yes' if 'END' in original else 'NO'}, "
+        f"key body: {len(body)} base64 characters (a Google key has about 1620-1630).\n"
+        "  Most likely the value was cut off or only its first line was pasted. Paste the private_key value\n"
+        "  from the service-account JSON as ONE line, exactly as in the file (with the \\n sequences),\n"
+        "  from -----BEGIN PRIVATE KEY----- to -----END PRIVATE KEY-----\\n. If the panel limits the length,\n"
+        "  split it into GCP_PRIVATE_KEY_1 and GCP_PRIVATE_KEY_2 (first and second half).")
+
+
+def _private_key() -> tuple[str, str]:
+    """(normalized PEM, raw value as received) - ("", "") if not set."""
+    key, where = _env_field("private_key"), "GCP_PRIVATE_KEY"
     if not key:   # key split over several variables: GCP_PRIVATE_KEY_1, GCP_PRIVATE_KEY_2, ...
         for p in _PREFIXES:
             parts = []
@@ -82,9 +110,13 @@ def _private_key() -> str:
                     break
                 parts.append(_clean(v))
             if parts:
-                key = "\n".join(parts)
+                key, where = "".join(parts), f"{p}PRIVATE_KEY_1..{len(parts)}"
                 break
-    return _normalize_pem(key) if key else ""
+    if not key:
+        return "", ""
+    pem = _normalize_pem(key)
+    _check_key(pem, key, where)
+    return pem, key
 
 
 def _credentials_json() -> tuple[str, str]:
@@ -105,10 +137,12 @@ def _credentials_json() -> tuple[str, str]:
             raise SystemExit(f"GOOGLE_CREDENTIALS_JSON is not valid JSON ({e.msg} at char {e.pos}). "
                              "Paste the whole service-account file content, starting with { and ending with }.")
         if info.get("private_key"):
-            info["private_key"] = _normalize_pem(info["private_key"])
+            raw_key = info["private_key"]
+            info["private_key"] = _normalize_pem(raw_key)
+            _check_key(info["private_key"], raw_key, "GOOGLE_CREDENTIALS_JSON")
         return json.dumps(info), "GOOGLE_CREDENTIALS_JSON"
 
-    key = _private_key()
+    key, _raw = _private_key()
     if not key:
         return "", ""
     info = {f: v for f in _GCP_FIELDS if f != "private_key" and (v := _env_field(f))}
