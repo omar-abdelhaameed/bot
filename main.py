@@ -1,5 +1,6 @@
 """Run the MAZBOOT finance bot:  python main.py"""
 import logging
+import os
 import sys
 
 from mazboot_bot import config
@@ -23,6 +24,18 @@ def main():
     else:
         if not cfg.sheet_id:
             sys.exit("GOOGLE_SHEET_ID is missing (.env)")
+        if cfg.google_credentials_json:
+            logging.info("Google credentials: from %s", cfg.google_credentials_source)
+        elif os.path.exists(cfg.google_credentials):
+            logging.info("Google credentials: from file %s", cfg.google_credentials)
+        else:
+            sys.exit(
+                "No Google credentials found. Set ONE of these:\n"
+                "  - GOOGLE_CREDENTIALS_JSON = the whole service-account JSON, or\n"
+                "  - GCP_PRIVATE_KEY + GCP_CLIENT_EMAIL (copied from the JSON; other GCP_* fields optional;\n"
+                "    a long key may be split into GCP_PRIVATE_KEY_1, GCP_PRIVATE_KEY_2, ...), or\n"
+                f"  - a file at '{cfg.google_credentials}' (GOOGLE_CREDENTIALS_FILE).\n"
+                f"Credential-like variable NAMES currently set: {config.credential_env_names() or 'none'}")
         storage = GoogleSheetsStorage(cfg.sheet_id, cfg.google_credentials, cfg.google_credentials_json)
 
     llm = None
