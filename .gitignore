@@ -1,0 +1,14 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+service_account.json
+*service_account*.json
+mazboot-*.json
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+logs/
